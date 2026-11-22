@@ -1,0 +1,33 @@
+; Strefa wewnętrzna wojak.lan firmy WojakNet
+;
+; UWAGA: przy KAŻDEJ zmianie tego pliku należy zwiększyć numer seryjny (Serial)!
+;        Format: RRRRMMDDNN - data zmiany i numer zmiany w danym dniu,
+;        np. 2026100301 -> 2026100302 (druga zmiana tego samego dnia).
+;
+; Krótkie czasy TTL (300 s) oraz pamięci podręcznej odpowiedzi negatywnych (60 s) są celowe:
+; zmiany rekordów szybko stają się widoczne także dla klientów korzystających z AdGuard Home,
+; który przechowuje odpowiedzi w swojej pamięci podręcznej.
+$TTL 300
+@   IN  SOA ns1.wojak.lan. admin.wojak.lan. (
+            2026112201 ; Serial
+            3600       ; Refresh
+            600        ; Retry
+            604800     ; Expire
+            60 )       ; Negative Cache TTL
+;
+@           IN  NS      ns1.wojak.lan.
+;
+; Serwer DNS (produkcyjny)
+ns1         IN  A       192.168.56.54
+;
+; Serwery platformy
+jenkins     IN  A       192.168.56.51
+agent       IN  A       192.168.56.52
+test        IN  A       192.168.56.53
+prod        IN  A       192.168.56.54
+agh         IN  A       192.168.56.55
+gitlab      IN  A       192.168.56.56
+;
+; Portal firmowy
+www         IN  A       192.168.56.54
+www-test    IN  A       192.168.56.53

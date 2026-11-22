@@ -1,0 +1,11 @@
+// Strefa wewnętrzna firmy
+zone "wojak.lan" {
+    type primary;
+    file "/etc/bind/db.wojak.lan";
+};
+
+// Strefa odwrotna (rekordy PTR) dla sieci laboratoryjnej 192.168.56.0/24
+zone "56.168.192.in-addr.arpa" {
+    type primary;
+    file "/etc/bind/db.56.168.192";
+};

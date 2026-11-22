@@ -1,0 +1,20 @@
+; Strefa odwrotna 56.168.192.in-addr.arpa (sieć 192.168.56.0/24)
+;
+; UWAGA: przy KAŻDEJ zmianie tego pliku należy zwiększyć numer seryjny (Serial)!
+$TTL 300
+@   IN  SOA ns1.wojak.lan. admin.wojak.lan. (
+            2026112201 ; Serial
+            3600       ; Refresh
+            600        ; Retry
+            604800     ; Expire
+            60 )       ; Negative Cache TTL
+;
+@                   IN  NS      ns1.wojak.lan.
+;
+; Ostatni oktet adresu IP -> nazwa hosta
+51	IN  PTR     jenkins.wojak.lan.
+52	IN  PTR     agent.wojak.lan.
+53	IN  PTR     test.wojak.lan.
+54	IN  PTR     prod.wojak.lan.
+55	IN  PTR     agh.wojak.lan.
+56	IN  PTR     gitlab.wojak.lan.
