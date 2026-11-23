@@ -1,5 +1,5 @@
 # Przepływ serwera DNS (BIND) – zespół DNS, WojakNet
-# Etap 2: testy (CI) + budowanie i publikacja obrazu. Wdrożenia zostaną dodane w kolejnym commicie.
+# Etap 3: testy (CI), budowanie i publikacja obrazu, wdrożenie TEST -> PROD (po zatwierdzeniu).
 name: DNS CI/CD
 
 on:
@@ -13,6 +13,7 @@ on:
       - '.dockerignore'
       - 'docker-compose.yml'
       - '.github/workflows/**'
+      - '.github/skrypty/**'
   pull_request:
     branches: [main]
   schedule:
@@ -20,6 +21,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  IP_PROD: 192.168.56.54   # oczekiwany adres www.wojak.lan i rekordu PTR w testach
 
 jobs:
   # ---------- CI: testy na runnerach GitHub ----------
@@ -182,3 +186,53 @@ jobs:
       - name: Przekazanie tagu przez outputs
         run: |
           echo "Obraz dla kolejnych zadań: ${{ steps.tagi.outputs.obraz }}:${{ steps.tagi.outputs.tag }}"
+
+  # ---------- CD: wdrożenia na self-hosted runnerach ----------
+  # Zabezpieczenie: zadania na self-hosted wyłącznie dla main i zdarzeń push / schedule
+  # (nigdy pull_request – kod z PR, także z forków, nie trafia na serwery TEST/PROD).
+  wdrozenie-test:
+    name: Wdrożenie na TEST
+    needs: budowanie
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'schedule')
+    runs-on: [self-hosted, test_wojak]
+    environment: Testowe
+    concurrency:
+      group: dns-Testowe
+      cancel-in-progress: false
+    env:
+      OBRAZ: ${{ needs.budowanie.outputs.obraz }}
+      TAG: ${{ needs.budowanie.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wdrożenie obrazu (docker compose)
+        run: |
+          echo "Wdrażany obraz: $OBRAZ:$TAG"
+          docker compose pull
+          docker compose up -d
+      - name: Test po wdrożeniu (A, PTR, SOA)
+        run: bash .github/skrypty/test_dns.sh "${{ vars.SERWER_IP }}"
+
+  wdrozenie-prod:
+    name: Wdrożenie na PROD
+    needs: [budowanie, wdrozenie-test]
+    # Harmonogram wdraża tylko na TEST; na PROD wyłącznie push do main (po zatwierdzeniu)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, prod_wojak]
+    environment: Produkcyjne
+    concurrency:
+      group: dns-Produkcyjne
+      cancel-in-progress: false
+    env:
+      OBRAZ: ${{ needs.budowanie.outputs.obraz }}
+      TAG: ${{ needs.budowanie.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wdrożenie obrazu (docker compose)
+        run: |
+          echo "Wdrażany obraz: $OBRAZ:$TAG"
+          docker compose pull
+          docker compose up -d
+      - name: Test po wdrożeniu (A, PTR, SOA)
+        run: bash .github/skrypty/test_dns.sh "${{ vars.SERWER_IP }}"
