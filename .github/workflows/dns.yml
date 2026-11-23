@@ -1,5 +1,5 @@
 # Przepływ serwera DNS (BIND) – zespół DNS, WojakNet
-# Etap 1: testy (CI). Budowanie i wdrożenia (CD) zostaną dodane w kolejnych commitach.
+# Etap 2: testy (CI) + budowanie i publikacja obrazu. Wdrożenia zostaną dodane w kolejnym commicie.
 name: DNS CI/CD
 
 on:
@@ -41,7 +41,7 @@ jobs:
       - name: Instalacja narzędzi BIND
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bind9-utils
       - name: Kopiowanie konfiguracji do /etc/bind
-        run: sudo mkdir -p /etc/bind /var/cache/bind && sudo cp bind-config/* /etc/bind/   
+        run: sudo mkdir -p /etc/bind /var/cache/bind && sudo cp bind-config/* /etc/bind/
       - name: ${{ matrix.test }}
         run: ${{ matrix.polecenie }}
 
@@ -102,3 +102,83 @@ jobs:
       - uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
+
+  # ---------- CD: budowanie i publikacja obrazu ----------
+  budowanie:
+    name: Budowanie i publikacja obrazu
+    needs: [sprawdz-konfiguracje, kontrola-soa, hadolint]
+    # main (push, harmonogram) lub tag v*.*.* – nigdy pull_request ani inne gałęzie
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    outputs:
+      obraz: ${{ steps.tagi.outputs.obraz }}
+      tag: ${{ steps.tagi.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # potrzebne do sprawdzenia, czy tag Git wskazuje commit z main
+
+      - name: Logowanie do Docker Hub
+        uses: docker/login-action@v4.8.0
+        with:
+          username: ${{ vars.DOCKERHUB_LOGIN }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Wyznaczenie tagów obrazu
+        id: tagi
+        env:
+          OBRAZ: ${{ vars.DOCKERHUB_LOGIN }}/dns_wojak
+          REF_TYP: ${{ github.ref_type }}
+          REF_NAZWA: ${{ github.ref_name }}
+        run: |
+          TAG="b${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          echo "obraz=$OBRAZ" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag unikalny: $TAG"
+
+          # Ponowienie przebiegu (re-run) ma ten sam numer – istniejącego tagu nie nadpisujemy
+          if docker buildx imagetools inspect "$OBRAZ:$TAG" > /dev/null 2>&1; then
+            echo "Obraz $OBRAZ:$TAG już istnieje - zostanie użyty bez ponownej publikacji"
+            echo "istnieje=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "istnieje=false" >> "$GITHUB_OUTPUT"
+
+          LISTA="$OBRAZ:$TAG"
+          if [ "$REF_TYP" = "tag" ]; then
+            WERSJA="${REF_NAZWA#v}"
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tag $REF_NAZWA nie wskazuje commita z gałęzi main"; exit 1
+            fi
+            if docker buildx imagetools inspect "$OBRAZ:$WERSJA" > /dev/null 2>&1; then
+              echo "::error::Wersja $WERSJA już istnieje w Docker Hub - ponowna publikacja jest niedozwolona"; exit 1
+            fi
+            LISTA="$LISTA,$OBRAZ:$WERSJA"
+          else
+            LISTA="$LISTA,$OBRAZ:latest"   # main (push lub harmonogram)
+          fi
+          echo "lista=$LISTA" >> "$GITHUB_OUTPUT"
+          echo "Publikowane tagi: $LISTA"
+
+      - name: Przygotowanie buildx
+        if: steps.tagi.outputs.istnieje != 'true'
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Budowanie i publikacja
+        if: steps.tagi.outputs.istnieje != 'true'
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tagi.outputs.lista }}
+          # Harmonogram: aktualny obraz bazowy i bez cache (poprawki bezpieczeństwa)
+          pull: ${{ github.event_name == 'schedule' }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: ${{ github.event_name != 'schedule' && 'type=gha' || '' }}
+          cache-to: type=gha,mode=max
+
+      - name: Przekazanie tagu przez outputs
+        run: |
+          echo "Obraz dla kolejnych zadań: ${{ steps.tagi.outputs.obraz }}:${{ steps.tagi.outputs.tag }}"
