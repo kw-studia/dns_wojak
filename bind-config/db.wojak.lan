@@ -9,7 +9,7 @@
 ; który przechowuje odpowiedzi w swojej pamięci podręcznej.
 $TTL 300
 @   IN  SOA ns1.wojak.lan. admin.wojak.lan. (
-            2026112201 ; Serial
+            2026112301 ; Serial
             3600       ; Refresh
             600        ; Retry
             604800     ; Expire
@@ -28,6 +28,6 @@ prod        IN  A       192.168.56.54
 agh         IN  A       192.168.56.55
 gitlab      IN  A       192.168.56.56
 ;
-; Portal firmowy
+; Portal firmowy (test kontroli SOA w pull requeście)
 www         IN  A       192.168.56.54
 www-test    IN  A       192.168.56.53
