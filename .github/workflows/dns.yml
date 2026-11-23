@@ -1,0 +1,104 @@
+# Przepływ serwera DNS (BIND) – zespół DNS, WojakNet
+# Etap 1: testy (CI). Budowanie i wdrożenia (CD) zostaną dodane w kolejnych commitach.
+name: DNS CI/CD
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*.*.*']
+    # Filtr ścieżek dotyczy tylko pushy na gałęzie (dla tagów GitHub go nie stosuje)
+    paths:
+      - 'bind-config/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'   # co poniedziałek 03:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------- CI: testy na runnerach GitHub ----------
+  sprawdz-konfiguracje:
+    name: ${{ matrix.test }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test: named-checkconf
+            polecenie: named-checkconf /etc/bind/named.conf
+          - test: named-checkzone wojak.lan
+            polecenie: named-checkzone wojak.lan /etc/bind/db.wojak.lan
+          - test: named-checkzone 56.168.192.in-addr.arpa
+            polecenie: named-checkzone 56.168.192.in-addr.arpa /etc/bind/db.56.168.192
+    steps:
+      - uses: actions/checkout@v7
+      - name: Instalacja narzędzi BIND
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bind9-utils
+      - name: Kopiowanie konfiguracji do /etc/bind
+        run: sudo mkdir -p /etc/bind /var/cache/bind && sudo cp bind-config/* /etc/bind/   
+      - name: ${{ matrix.test }}
+        run: ${{ matrix.polecenie }}
+
+  kontrola-soa:
+    name: Kontrola numeru seryjnego SOA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # pełna historia – potrzebna do porównania z wcześniejszą wersją
+      - name: Porównanie numerów seryjnych
+        env:
+          ZDARZENIE: ${{ github.event_name }}
+          REF_TYP: ${{ github.ref_type }}
+          PRZED: ${{ github.event.before }}
+          GALAZ_DOCELOWA: ${{ github.base_ref }}
+        run: |
+          # numer seryjny = 3. pole po słowie SOA (po usunięciu komentarzy i nawiasów)
+          serial() { sed 's/;.*//' | tr -d '()' | tr '\n' ' ' | awk '{for(i=1;i<=NF;i++) if($i=="SOA"){print $(i+3); exit}}'; }
+
+          case "$ZDARZENIE" in
+            pull_request)
+              BAZA="origin/$GALAZ_DOCELOWA" ;;
+            push)
+              if [ "$REF_TYP" = "tag" ]; then echo "Tag Git - kontrola pominięta"; exit 0; fi
+              if [ -z "$PRZED" ] || [ "$PRZED" = "0000000000000000000000000000000000000000" ]; then
+                echo "Pierwszy push nowej gałęzi - kontrola pominięta"; exit 0
+              fi
+              BAZA="$PRZED" ;;
+            *)
+              echo "Zdarzenie $ZDARZENIE - kontrola pominięta"; exit 0 ;;
+          esac
+
+          if ! git cat-file -e "$BAZA^{commit}" 2>/dev/null; then
+            echo "::warning::Brak commita bazowego $BAZA - kontrola pominięta"; exit 0
+          fi
+          echo "Porównanie z: $BAZA ($(git rev-parse --short "$BAZA"))"
+
+          BLAD=0
+          for PLIK in bind-config/db.*; do
+            if ! git cat-file -e "$BAZA:$PLIK" 2>/dev/null; then echo "$PLIK: nowa strefa - pominięta"; continue; fi
+            if git diff --quiet "$BAZA" HEAD -- "$PLIK"; then echo "$PLIK: bez zmian"; continue; fi
+            STARY=$(git show "$BAZA:$PLIK" | serial)
+            NOWY=$(serial < "$PLIK")
+            echo "$PLIK: zmieniony, serial przed = $STARY, po = $NOWY"
+            if [ "$NOWY" -le "$STARY" ]; then
+              echo "::error file=$PLIK::Plik strefy zmieniony bez zwiększenia numeru seryjnego SOA ($STARY -> $NOWY)"
+              BLAD=1
+            fi
+          done
+          exit $BLAD
+
+  hadolint:
+    name: Analiza Dockerfile (hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
