@@ -1,0 +1,73 @@
+# Ręczne wdrożenie istniejącego obrazu DNS (wycofanie zmian / promocja obrazu z harmonogramu)
+# Nie buduje obrazu – wdraża obraz z Docker Hub wskazany tagiem unikalnym.
+name: DNS – wdrożenie istniejącego obrazu
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag unikalny istniejącego obrazu (np. b8-82d222b)'
+        required: true
+        type: string
+      srodowisko:
+        description: 'Środowisko docelowe'
+        required: true
+        type: choice
+        options:
+          - Testowe
+          - Produkcyjne
+        default: Testowe
+
+permissions:
+  contents: read
+
+env:
+  IP_PROD: 192.168.56.54   # oczekiwany adres www.wojak.lan i rekordu PTR w testach
+
+jobs:
+  sprawdzenie:
+    name: Sprawdzenie obrazu w Docker Hub
+    runs-on: ubuntu-latest
+    outputs:
+      obraz: ${{ steps.obraz.outputs.obraz }}
+      tag: ${{ steps.obraz.outputs.tag }}
+    steps:
+      - name: Czy obraz o podanym tagu istnieje
+        id: obraz
+        env:
+          OBRAZ: ${{ vars.DOCKERHUB_LOGIN }}/dns_wojak
+          TAG: ${{ inputs.tag }}
+        run: |
+          # Dozwolone wyłącznie tagi unikalne (nie latest ani wersje semantyczne)
+          if ! [[ "$TAG" =~ ^b[0-9]+-[0-9a-f]{7}$ ]]; then
+            echo "::error::'$TAG' nie jest tagiem unikalnym (format b<numer>-<skrót_commita>)"; exit 1
+          fi
+          if ! docker buildx imagetools inspect "$OBRAZ:$TAG" > /dev/null 2>&1; then
+            echo "::error::Obraz $OBRAZ:$TAG nie istnieje w Docker Hub"; exit 1
+          fi
+          echo "Obraz $OBRAZ:$TAG istnieje - zostanie wdrożony bez ponownego budowania"
+          echo "obraz=$OBRAZ" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  wdrozenie:
+    name: Wdrożenie na ${{ inputs.srodowisko }}
+    needs: sprawdzenie
+    # Self-hosted tylko dla workflow_dispatch z gałęzi main
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, "${{ inputs.srodowisko == 'Produkcyjne' && 'prod_wojak' || 'test_wojak' }}"]
+    environment: ${{ inputs.srodowisko }}   # Produkcyjne wymaga zatwierdzenia
+    concurrency:
+      group: dns-${{ inputs.srodowisko }}   # ta sama grupa co w przepływie DNS CI/CD
+      cancel-in-progress: false
+    env:
+      OBRAZ: ${{ needs.sprawdzenie.outputs.obraz }}
+      TAG: ${{ needs.sprawdzenie.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wdrożenie obrazu (docker compose)
+        run: |
+          echo "Wdrażany obraz: $OBRAZ:$TAG"
+          docker compose pull
+          docker compose up -d
+      - name: Test po wdrożeniu (A, PTR, SOA)
+        run: bash .github/skrypty/test_dns.sh "${{ vars.SERWER_IP }}"
