@@ -17,7 +17,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: '17 3 * * 1'   # co poniedziałek 03:17 UTC
+    - cron: '57 14 * * *'
 
 permissions:
   contents: read
